@@ -1,0 +1,668 @@
+#!/usr/bin/env python3
+"""Read-only scanner for outgoing SSH sessions.
+
+One JSON object per invocation on stdout. Exit 0 on success, 1 on a handled
+error (reported inside the JSON), 2 on an unknown action. QML never parses
+stderr. The full contract lives in AGENTS.md §6–7; the hard rules in §4 are
+load-bearing — in particular: own UID only, never read a parent's cmdline,
+never emit a raw command line, no files written, python3 stdlib only.
+
+The /proc root and the subprocess runner are parameters (SSHWATCH_PROC_ROOT
+plus the `runner` argument threaded through) so the scan logic stays testable
+from fixture trees on machines without /proc.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+CMDLINE_CAP = 64 * 1024          # bounded read: an ssh cmdline never needs more
+NET_TCP_CAP = 8 * 1024 * 1024    # /proc/net/tcp{,6} on a busy box
+HYPRCTL_CAP = 1024 * 1024
+SSH_G_TIMEOUT = 2.0
+HYPRCTL_TIMEOUT = 2.0
+PID_SCAN_CAP = 32768             # bounded scan even on pathological /proc
+
+# OpenSSH client option letters that consume an argument. Everything else is
+# boolean and may cluster (-Nf, -tt). Keep in sync with ssh(1) of the target
+# OpenSSH version.
+ARG_OPTS = set("BbcDEeFIiJLlmOopQRSWw")
+
+EDITOR_COMMS = ("code", "codium", "node")
+
+
+def proc_root():
+    return os.environ.get("SSHWATCH_PROC_ROOT", "/proc")
+
+
+def default_runner(cmd, timeout, cap):
+    """Run a subprocess, return (exit_code, stdout_text). Never raises.
+
+    exit_code is None when the binary is missing, the call timed out, or
+    anything else went wrong — callers treat that the same as a failure.
+    """
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout[:cap].decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, ""
+
+
+# --------------------------------------------------------------------- /proc
+
+def read_bytes(path, cap):
+    """Race-tolerant bounded read. A pid can exit between listdir and open."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(cap)
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return None
+
+
+def read_text(path, cap):
+    raw = read_bytes(path, cap)
+    return None if raw is None else raw.decode("utf-8", "replace")
+
+
+def read_btime(root):
+    """Boot time as a fixed epoch value — unlike /proc/uptime it does not
+    drift with suspend, so startedAt stays stable across scans."""
+    text = read_text(os.path.join(root, "stat"), 1024 * 1024)
+    if text is None:
+        return None
+    for line in text.splitlines():
+        if line.startswith("btime "):
+            try:
+                return int(line.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def clock_ticks():
+    try:
+        return os.sysconf("SC_CLK_TCK") or 100
+    except (ValueError, OSError, AttributeError):
+        return 100
+
+
+def parse_stat(raw):
+    """Return (state, ppid, starttime_ticks) from /proc/<pid>/stat.
+
+    Field 2 is comm and may contain spaces and parentheses — a process named
+    "(ssh) (x" is legal — so split on the LAST ')' and never on whitespace.
+    """
+    try:
+        tail = raw[raw.rindex(")") + 2:]
+        fields = tail.split()
+        return fields[0], int(fields[1]), int(fields[19])
+    except (ValueError, IndexError):
+        return None, None, None
+
+
+def collect_processes(root):
+    """One pass over /proc: every process owned by our UID, comm + ppid +
+    starttime. Other users' processes — including root's — are never read
+    (hard rule 1); the uid check via os.stat happens before any file open.
+    """
+    uid = os.getuid()
+    table = {}
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return None
+    scanned = 0
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        scanned += 1
+        if scanned > PID_SCAN_CAP:
+            break
+        pid_dir = os.path.join(root, entry)
+        try:
+            if os.stat(pid_dir).st_uid != uid:
+                continue
+        except OSError:
+            continue
+        comm = read_text(os.path.join(pid_dir, "comm"), 4096)
+        stat_raw = read_text(os.path.join(pid_dir, "stat"), 8192)
+        if comm is None or stat_raw is None:
+            continue
+        state, ppid, starttime = parse_stat(stat_raw)
+        if ppid is None:
+            continue
+        table[int(entry)] = {
+            "comm": comm.strip(),
+            "state": state,
+            "ppid": ppid,
+            "starttime": starttime,
+        }
+    return table
+
+
+# ------------------------------------------------------------------- sockets
+
+def decode_ipv4(hexaddr):
+    """AABBCCDD is the address as 4 bytes little-endian: 0500000A → 10.0.0.5"""
+    return socket.inet_ntoa(struct.pack("<I", int(hexaddr, 16)))
+
+
+def decode_ipv6(hexaddr):
+    """32 hex chars parsed as four little-endian 32-bit words, not one blob."""
+    packed = b"".join(
+        struct.pack("<I", int(hexaddr[i:i + 8], 16)) for i in (0, 8, 16, 24)
+    )
+    return socket.inet_ntop(socket.AF_INET6, packed)
+
+
+def is_loopback(ip):
+    return ip.startswith("127.") or ip == "::1" or ip.startswith("::ffff:127.")
+
+
+def read_established(root):
+    """inode → (ip, port, family) for every ESTABLISHED TCP socket."""
+    table = {}
+    for name, family, decode in (
+        ("tcp", "inet", decode_ipv4),
+        ("tcp6", "inet6", decode_ipv6),
+    ):
+        text = read_text(os.path.join(root, "net", name), NET_TCP_CAP)
+        if text is None:
+            continue
+        for line in text.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != "01":
+                continue
+            try:
+                addr_hex, port_hex = fields[2].split(":")
+                inode = int(fields[9])
+                table[inode] = (decode(addr_hex), int(port_hex, 16), family)
+            except (ValueError, IndexError):
+                continue
+    return table
+
+
+def socket_inodes(root, pid):
+    """Socket inodes of a pid's open fds, in fd order (lowest = oldest)."""
+    fd_dir = os.path.join(root, str(pid), "fd")
+    inodes = []
+    try:
+        fds = sorted((f for f in os.listdir(fd_dir) if f.isdigit()), key=int)
+    except OSError:
+        return inodes
+    for fd in fds:
+        try:
+            link = os.readlink(os.path.join(fd_dir, fd))
+        except OSError:
+            continue
+        if link.startswith("socket:["):
+            try:
+                inodes.append(int(link[8:-1]))
+            except ValueError:
+                continue
+    return inodes
+
+
+def pick_peer(inodes, established):
+    """The ESTABLISHED TCP socket whose remote is not loopback; several fds
+    may qualify (agent forwarding, X11) — the lowest fd wins. None is a valid
+    outcome (multiplexed sessions own no socket) and is not an error."""
+    for inode in inodes:
+        entry = established.get(inode)
+        if entry and not is_loopback(entry[0]):
+            return entry
+    return None
+
+
+# ------------------------------------------------------------------- cmdline
+
+def parse_forward(kind, spec):
+    """Best-effort parse of a -L/-R/-D value. The raw spec is always kept:
+    an unparsed tunnel is still a tunnel and must never be dropped."""
+    fwd = {
+        "kind": kind,
+        "spec": spec,
+        "bind": "",
+        "listenPort": 0,
+        "targetHost": "",
+        "targetPort": 0,
+    }
+    if "[" in spec or "/" in spec:
+        # IPv6 brackets or unix socket paths: keep the raw spec, skip the parse.
+        return fwd
+    parts = spec.split(":")
+    try:
+        if kind == "D":
+            if len(parts) == 1:
+                fwd["listenPort"] = int(parts[0])
+            elif len(parts) == 2:
+                fwd["bind"] = parts[0]
+                fwd["listenPort"] = int(parts[1])
+        else:
+            if len(parts) == 3:
+                fwd["listenPort"] = int(parts[0])
+                fwd["targetHost"] = parts[1]
+                fwd["targetPort"] = int(parts[2])
+            elif len(parts) == 4:
+                fwd["bind"] = parts[0]
+                fwd["listenPort"] = int(parts[1])
+                fwd["targetHost"] = parts[2]
+                fwd["targetPort"] = int(parts[3])
+    except ValueError:
+        # Numeric fields stay 0; the UI falls back to showing the raw spec.
+        fwd["listenPort"] = 0
+        fwd["targetPort"] = 0
+    return fwd
+
+
+def parse_cmdline(argv):
+    """Extract ONLY the target token and the forward/flag set from ssh's own
+    argv. -o values, ProxyCommand, -i paths, and the remote command are parsed
+    past and discarded — none of them may reach the JSON (hard rule 3).
+    """
+    target = ""
+    forwards = []
+    flags = set()
+    port_override = 0
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            i += 1
+            if i < len(argv):
+                target = argv[i]
+            break
+        if tok.startswith("-") and len(tok) > 1:
+            j = 1
+            while j < len(tok):
+                letter = tok[j]
+                if letter in ARG_OPTS:
+                    if j + 1 < len(tok):
+                        value = tok[j + 1:]
+                    else:
+                        i += 1
+                        value = argv[i] if i < len(argv) else ""
+                    if letter in ("L", "R", "D"):
+                        forwards.append(parse_forward(letter, value))
+                    elif letter == "W":
+                        flags.add("W")
+                    elif letter == "p":
+                        try:
+                            port_override = int(value)
+                        except ValueError:
+                            pass
+                    break
+                if letter in ("N", "f", "M"):
+                    flags.add(letter)
+                j += 1
+            i += 1
+            continue
+        target = tok
+        break  # everything after the target is the remote command — discard
+    return target, forwards, flags, port_override
+
+
+# ---------------------------------------------------------------- resolution
+
+def resolve_target(target, runner, cache, port_override=0):
+    """Effective user/hostname/port via `ssh -G` — OpenSSH parses its own
+    config, we own no config parser. Deduplicated per target within this
+    invocation (several sessions to one host resolve once). Timed out at 2s
+    because it runs the user's own config, including Match exec blocks.
+
+    A -p from the session's own argv is forwarded so the resolved port
+    matches what the connection actually uses; -l is deliberately not
+    forwarded (documented known limit — the row follows ~/.ssh/config).
+    """
+    key = (target, port_override)
+    if key in cache:
+        return cache[key]
+    result = {"user": "", "hostname": "", "port": port_override or 22}
+    alias = target
+    if "@" in alias:
+        result["user"], alias = alias.split("@", 1)
+    result["hostname"] = alias
+    cmd = ["ssh", "-G"]
+    if port_override:
+        cmd += ["-p", str(port_override)]
+    cmd.append(target)
+    code, out = runner(cmd, SSH_G_TIMEOUT, 256 * 1024)
+    if code == 0:
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            key, value = parts[0].lower(), parts[1].strip()
+            if key == "user":
+                result["user"] = value
+            elif key == "hostname":
+                result["hostname"] = value
+            elif key == "port":
+                try:
+                    result["port"] = int(value)
+                except ValueError:
+                    pass
+    cache[target] = result
+    return result
+
+
+def target_alias(target):
+    """The host part of what the user actually typed — the label shows this,
+    not the resolved HostName."""
+    return target.split("@", 1)[1] if "@" in target else target
+
+
+# --------------------------------------------------------------- attribution
+
+def read_windows(runner):
+    """pid → window address from hyprctl, once per invocation. Absence or
+    failure is not an error — everything just becomes unfocusable."""
+    code, out = runner(["hyprctl", "clients", "-j"], HYPRCTL_TIMEOUT, HYPRCTL_CAP)
+    if code != 0 or not out:
+        return {}
+    try:
+        clients = json.loads(out)
+    except ValueError:
+        return {}
+    windows = {}
+    if isinstance(clients, list):
+        for client in clients:
+            if isinstance(client, dict) and isinstance(client.get("pid"), int):
+                windows[client["pid"]] = str(client.get("address", ""))
+    return windows
+
+
+def owner_chain(pid, procs):
+    """Walk the ppid chain upward, skipping ssh ancestors, until pid 1 or the
+    first process we do not own (rule 1 forbids reading foreign processes, so
+    the walk simply stops there). Returns (owner_pid, ancestor_pids, hit_init).
+    """
+    ancestors = []
+    owner = 0
+    cur = procs[pid]["ppid"] if pid in procs else 0
+    hops = 0
+    hit_init = False
+    while cur > 1 and hops < 64:
+        hops += 1
+        info = procs.get(cur)
+        if info is None:
+            break  # foreign (or exited) ancestor — chain ends here
+        ancestors.append(cur)
+        if owner == 0 and info["comm"] != "ssh":
+            owner = cur
+        cur = info["ppid"]
+    if cur <= 1:
+        hit_init = True
+    return owner, ancestors, hit_init
+
+
+def classify_owner(owner, ancestors, hit_init, procs, windows):
+    """§7.7 classification order. `comm` only — a parent's cmdline can hold a
+    plaintext password (sshpass) and is never opened (hard rule 2)."""
+    owner_comm = procs[owner]["comm"] if owner in procs else ""
+    window_addr = ""
+    for pid in ancestors:
+        if pid in windows:
+            window_addr = windows[pid]
+            break
+    if window_addr:
+        return owner_comm, "terminal", True, window_addr
+    if "tmux" in owner_comm:
+        return owner_comm, "tmux", False, ""
+    if owner_comm in EDITOR_COMMS or owner_comm.startswith("jetbrains"):
+        return owner_comm, "editor", False, ""
+    reaches_systemd = hit_init or any(
+        procs.get(pid, {}).get("comm") == "systemd" for pid in ancestors
+    )
+    if reaches_systemd and not window_addr:
+        return owner_comm, "service", False, ""
+    return owner_comm, "unknown", False, ""
+
+
+# --------------------------------------------------------------------- scan
+
+def empty_status(error):
+    return {
+        "ok": False,
+        "generatedAt": time.time(),
+        "count": 0,
+        "sessions": [],
+        "lastError": error,
+    }
+
+
+def scan_sessions(root, runner, min_age):
+    now = time.time()
+    btime = read_btime(root)
+    procs = collect_processes(root)
+    if btime is None or procs is None:
+        return empty_status("cannot read /proc")
+    hz = clock_ticks()
+    established = read_established(root)
+    windows = read_windows(runner)
+    resolve_cache = {}
+
+    # Candidates: comm must be exactly "ssh". scp/sftp/rsync spawn a real ssh
+    # child, so matching them would duplicate rows for one connection.
+    candidates = {}
+    for pid, info in procs.items():
+        if info["comm"] != "ssh":
+            continue
+        cmdline_raw = read_bytes(os.path.join(root, str(pid), "cmdline"), CMDLINE_CAP)
+        if cmdline_raw is None:
+            continue
+        argv = [a.decode("utf-8", "replace") for a in cmdline_raw.split(b"\x00") if a]
+        target, forwards, flags, port_override = parse_cmdline(argv)
+        peer = pick_peer(socket_inodes(root, pid), established)
+        candidates[pid] = {
+            "pid": pid,
+            "ppid": info["ppid"],
+            "starttime": info["starttime"],
+            "target": target,
+            "forwards": forwards,
+            "flags": flags,
+            "portOverride": port_override,
+            "peer": peer,
+        }
+
+    # §7.6 jump-host folding: a candidate child carrying -W is the transport
+    # to the hop; the parent is the session. One row, child removed. The child
+    # is never dropped silently — its socket and hop name move to the parent.
+    children_by_ppid = {}
+    for pid, cand in candidates.items():
+        children_by_ppid.setdefault(cand["ppid"], []).append(pid)
+
+    folded = set()
+    for pid, cand in candidates.items():
+        for child_pid in children_by_ppid.get(pid, []):
+            child = candidates[child_pid]
+            if "W" in child["flags"]:
+                hop = resolve_target(
+                    child["target"], runner, resolve_cache, child["portOverride"]
+                )
+                cand["via"] = hop["hostname"] or target_alias(child["target"])
+                if cand["peer"] is None:
+                    cand["peer"] = child["peer"]
+                folded.add(child_pid)
+                break
+
+    sessions = []
+    for pid, cand in candidates.items():
+        if pid in folded:
+            continue
+        has_ssh_child = any(
+            c for c in children_by_ppid.get(pid, []) if c not in folded
+        )
+        # No socket and no ssh child ⇒ riding an existing ControlMaster.
+        # A real session, not an error — never drop a socketless candidate.
+        shared = cand["peer"] is None and not has_ssh_child and "via" not in cand
+
+        resolved = resolve_target(
+            cand["target"], runner, resolve_cache, cand["portOverride"]
+        )
+        alias = target_alias(cand["target"])
+        label = (resolved["user"] + "@" + alias) if resolved["user"] else alias
+
+        owner, ancestors, hit_init = owner_chain(pid, procs)
+        owner_comm, owner_kind, focusable, window_addr = classify_owner(
+            owner, ancestors, hit_init, procs, windows
+        )
+
+        peer = cand["peer"]
+        started_at = btime + cand["starttime"] / hz
+        sessions.append({
+            "key": "%d:%d" % (pid, cand["starttime"]),
+            "pid": pid,
+            "startedAt": started_at,
+            "target": alias,
+            "user": resolved["user"],
+            "hostname": resolved["hostname"],
+            "port": resolved["port"],
+            "label": label,
+            "peerAddress": peer[0] if peer else "",
+            "peerPort": peer[1] if peer else 0,
+            "family": peer[2] if peer else "",
+            "via": cand.get("via", ""),
+            "shared": shared,
+            "master": "M" in cand["flags"],
+            "noShell": "N" in cand["flags"],
+            "background": "f" in cand["flags"],
+            "owner": owner_comm,
+            "ownerPid": owner,
+            "ownerKind": owner_kind,
+            "focusable": focusable,
+            "windowAddress": window_addr,
+            "forwards": cand["forwards"],
+        })
+
+    # Age filter LAST, so a young -W proxy child was still available for
+    # folding into its older parent above.
+    if min_age > 0:
+        sessions = [s for s in sessions if now - s["startedAt"] >= min_age]
+
+    sessions.sort(key=lambda s: s["startedAt"])
+    return {
+        "ok": True,
+        "generatedAt": now,
+        "count": len(sessions),
+        "sessions": sessions,
+        "lastError": "",
+    }
+
+
+# ------------------------------------------------------------------- actions
+
+def action_status(args, runner):
+    result = scan_sessions(proc_root(), runner, max(0, args.min_age))
+    return result, 0 if result["ok"] else 1
+
+
+def action_focus(args, runner):
+    """Re-resolve the session's owning window and focus it. Re-resolves rather
+    than trusting a cached address, which may be stale."""
+    result = {"ok": False, "focused": False, "lastError": ""}
+    try:
+        pid_str, ticks_str = args.key.split(":", 1)
+        pid, ticks = int(pid_str), int(ticks_str)
+    except ValueError:
+        result["lastError"] = "invalid session key"
+        return result, 1
+
+    root = proc_root()
+    procs = collect_processes(root)
+    if procs is None:
+        result["lastError"] = "cannot read /proc"
+        return result, 1
+    info = procs.get(pid)
+    if info is None or info["starttime"] != ticks:
+        result["lastError"] = "session is gone"
+        return result, 1
+
+    windows = read_windows(runner)
+    if not windows:
+        result["lastError"] = "hyprctl unavailable"
+        return result, 1
+    _owner, ancestors, _hit_init = owner_chain(pid, procs)
+    address = ""
+    for anc in ancestors:
+        if anc in windows:
+            address = windows[anc]
+            break
+    if not address:
+        result["lastError"] = "no window found for this session"
+        return result, 1
+
+    code, _out = runner(
+        ["hyprctl", "dispatch", "focuswindow", "address:" + address],
+        HYPRCTL_TIMEOUT, HYPRCTL_CAP,
+    )
+    if code != 0:
+        result["lastError"] = "hyprctl dispatch failed"
+        return result, 1
+    result["ok"] = True
+    result["focused"] = True
+    return result, 0
+
+
+def action_check(_args, _runner):
+    """Cheap environment probe."""
+    root = proc_root()
+    proc_readable = read_btime(root) is not None and collect_processes(root) is not None
+    result = {
+        "ok": proc_readable,
+        "procReadable": proc_readable,
+        "sshPresent": shutil.which("ssh") is not None,
+        "hyprctlPresent": shutil.which("hyprctl") is not None,
+        "lastError": "" if proc_readable else "cannot read /proc",
+    }
+    return result, 0 if result["ok"] else 1
+
+
+def main(argv=None, runner=default_runner):
+    parser = argparse.ArgumentParser(prog="omarchy-sshwatch", add_help=True)
+    sub = parser.add_subparsers(dest="action")
+
+    status = sub.add_parser("status")
+    status.add_argument("--min-age", type=int, default=0, dest="min_age")
+
+    focus = sub.add_parser("focus")
+    focus.add_argument("key")
+
+    sub.add_parser("check")
+
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit:
+        # argparse already printed to stderr; report the unknown action on
+        # stdout too so QML never has to parse stderr.
+        print(json.dumps(empty_status("unknown action or arguments")))
+        return 2
+
+    actions = {"status": action_status, "focus": action_focus, "check": action_check}
+    handler = actions.get(args.action)
+    if handler is None:
+        print(json.dumps(empty_status("unknown action")))
+        return 2
+
+    try:
+        result, code = handler(args, runner)
+    except Exception as exc:  # noqa: BLE001 — a blip must not blank the panel
+        result, code = empty_status("internal error: %s" % exc.__class__.__name__), 1
+    print(json.dumps(result))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

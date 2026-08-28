@@ -41,7 +41,7 @@ signals a process.
 | 5 | Row identity | **A row is a process, not a socket.** Socket data is attached when present and omitted when not |
 | 6 | Noise floor | Sessions younger than `minAgeSec` (default 3) are hidden, so short-lived `git`/`scp` children never flicker the bar |
 | 7 | Attribution | Each row names its owning process via the ppid chain — **`comm` only, never `cmdline`** (see rule 2) |
-| 8 | Label resolution | `ssh -G <target>`, cached per target. OpenSSH parses its own config; we own no config parser |
+| 8 | Label resolution | `ssh -G [-p <port>] <target>`, deduplicated per (target, port) within one scan. A `-p` from the session's argv is forwarded so the resolved port matches the connection; `-l` is not (documented known limit). OpenSSH parses its own config; we own no config parser |
 | 9 | Relationships | `-W` child ⇒ fold into parent as `via <hop>`. No socket and no ssh child ⇒ `shared` (multiplexed on a ControlMaster) |
 | 10 | Forwards | `-L` / `-R` / `-D` parsed from cmdline and displayed; `-N` / `-f` / `-M` / `-W` recorded as flags |
 | 11 | Bar display | **Icon only, colour-coded.** No count, no hostname, no ticking clock on the bar |
@@ -119,8 +119,10 @@ Violating any of these is a defect, not a style preference.
     pid — never abort the scan.
 13. **Every key in the status JSON is always present.** Unknown numbers are `0`, unknown strings
     `""`, unknown lists `[]`, unknown booleans `false`. QML must never handle `undefined`.
-14. **`ssh -G` is cached per target and timed out** (2 s). It is a subprocess that runs the user's
-    own config; calling it once per session per scan is unacceptable.
+14. **`ssh -G` is deduplicated per target within a scan and timed out** (2 s). It is a subprocess
+    that runs the user's own config; calling it once per *session* per scan is unacceptable — three
+    sessions to one host resolve once. A cross-scan cache is impossible by design: the helper is
+    stateless (decision 16) and writes no files (rule 5), so resolution runs once per host per scan.
 15. **Bounded reads.** Cap `cmdline` at 64 KiB, cap the scanned pid count, cap `hyprctl` output at
     1 MiB. Never read an unbounded file into memory.
 16. **Don't reintroduce removed scope.** No incoming sessions, no kill action, no on-disk history,

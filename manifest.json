@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.RayTM.sshwatch",
+  "name": "SSH Watch",
+  "version": "0.1.0",
+  "author": "Lukas Walter",
+  "license": "MIT",
+  "description": "Shows outgoing SSH connections: destination, owning process, port forwards, and session age. Colour-coded bar icon warns about stale sessions.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "SSH Watch",
+    "description": "Outgoing SSH sessions with destinations, port forwards, and a stale-session warning.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 5,
+      "minAgeSec": 3,
+      "staleAfterHours": 4,
+      "recentCount": 5,
+      "showForwards": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "minAgeSec",
+        "type": "integer",
+        "label": "Minimum age (seconds)",
+        "min": 0,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 3
+      },
+      {
+        "key": "staleAfterHours",
+        "type": "integer",
+        "label": "Stale after (hours)",
+        "min": 0,
+        "max": 48,
+        "step": 1,
+        "defaultValue": 4
+      },
+      {
+        "key": "recentCount",
+        "type": "integer",
+        "label": "Recent entries",
+        "min": 0,
+        "max": 20,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "showForwards",
+        "type": "boolean",
+        "label": "Show port forwards",
+        "defaultValue": true
+      }
+    ]
+  }
+}

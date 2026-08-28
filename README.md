@@ -143,9 +143,9 @@ It is also not a session manager, not a Waybar module, and not a connection log 
   target and the forward flags — no `-o` options, no `ProxyCommand`, no paths.
 - **`ssh -G` runs your own config.** Host aliases are resolved by invoking `ssh -G <target>`, which
   is OpenSSH's real parser. If your `~/.ssh/config` contains `Match exec "<command>"` directives,
-  that command runs — as it does whenever you use `ssh` normally. Results are cached per target, so
-  it happens once per host rather than once per refresh, but if you keep expensive or
-  side-effecting `Match exec` blocks in your config you should know this.
+  that command runs — as it does whenever you use `ssh` normally. Resolution is deduplicated per
+  host within a scan, so it happens once per host per refresh (never once per session), but if you
+  keep expensive or side-effecting `Match exec` blocks in your config you should know this.
 - **What the plugin reads:** `/proc/<pid>/{comm,cmdline,stat,fd}` for your own processes,
   `/proc/net/tcp` and `/proc/net/tcp6`, `/proc/uptime`. What it runs: `ssh -G <target>` and, when
   present, `hyprctl clients -j` plus `hyprctl dispatch focuswindow` on your explicit action.
