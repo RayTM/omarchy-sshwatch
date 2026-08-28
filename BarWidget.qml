@@ -13,14 +13,14 @@ import "Model.js" as Model
 // never a hostname; destinations only appear in the tooltip and the panel.
 Panel {
   id: root
-  moduleName: "io.github.CHANGEME.sshwatch"
-  ipcTarget: "io.github.CHANGEME.sshwatch"
+  moduleName: "RayTM.sshwatch"
+  ipcTarget: "RayTM.sshwatch"
   manageIpc: false
 
   // The shared service (kind: service in the same manifest). The lookup
   // binding re-evaluates when the shell registers services, so load order
   // does not matter.
-  readonly property var svc: bar && bar.shell ? bar.shell.serviceFor("io.github.CHANGEME.sshwatch") : null
+  readonly property var svc: bar && bar.shell ? bar.shell.serviceFor("RayTM.sshwatch") : null
 
   // Settings live on this widget's shell.json entry; the service applies
   // them. Every instance pushes the same values, so this is idempotent.

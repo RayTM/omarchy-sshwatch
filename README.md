@@ -6,8 +6,6 @@ when a session has been open longer than you probably meant it to be.
 
 ![SSH Watch panel in Omarchy](preview.png)
 
-> Status: in development. See [AGENTS.md](AGENTS.md) for the build roadmap.
-
 ## Features
 
 - **Bar icon, colour-coded** — dim when nothing is connected, normal while sessions are up, amber
@@ -125,8 +123,7 @@ It deliberately does not show incoming sessions (who is logged into this machine
 `sshd` and run as root; reading them properly needs privileges this plugin does not want and will
 never ask for. If you need that, `who` and `journalctl -u sshd` are the right tools.
 
-It is also not a session manager, not a Waybar module, and not a connection log — see
-[AGENTS.md](AGENTS.md) for the full non-goals.
+It is also not a session manager, not a Waybar module, and not a connection log.
 
 ## Privacy and security
 
@@ -156,7 +153,7 @@ It is also not a session manager, not a Waybar module, and not a connection log 
 Run the helper by hand to see the raw answer:
 
 ```bash
-~/.config/omarchy/plugins/io.github.RayTM.sshwatch/bin/omarchy-sshwatch status | jq
+~/.config/omarchy/plugins/RayTM.sshwatch/bin/omarchy-sshwatch status | jq
 ```
 
 | Symptom | Cause |
@@ -169,18 +166,18 @@ Run the helper by hand to see the raw answer:
 | Focus-window greyed out | The session's owner is `tmux`, VS Code, `autossh`, or a systemd unit — there is no window to focus. |
 | Focus-window does nothing anywhere | `hyprctl` is missing or not on `PATH`. Check `hyprctl clients -j \| head`. |
 | `"lastError": "cannot read /proc"` | Unusual; a hardened kernel with `hidepid=2` will hide processes even from their owner in some configurations. |
-| Icon missing entirely | `omarchy plugin validate ~/.config/omarchy/plugins/io.github.RayTM.sshwatch` |
+| Icon missing entirely | `omarchy plugin validate ~/.config/omarchy/plugins/RayTM.sshwatch` |
 
 ## Updating
 
 ```bash
-omarchy plugin update io.github.RayTM.sshwatch
+omarchy plugin update RayTM.sshwatch
 ```
 
 ## Removal
 
 ```bash
-omarchy plugin remove io.github.RayTM.sshwatch
+omarchy plugin remove RayTM.sshwatch
 ```
 
 Nothing is left behind — the plugin writes no configuration or cache files.

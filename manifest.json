@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.RayTM.sshwatch",
+  "id": "RayTM.sshwatch",
   "name": "SSH Watch",
   "version": "0.1.0",
   "author": "Lukas Walter",
@@ -13,7 +13,7 @@
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "Panel.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "SSH Watch",
