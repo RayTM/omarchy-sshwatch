@@ -49,7 +49,7 @@ No SSH server, no configuration, no credentials, and no network access are requi
 ## Installation
 
 ```bash
-omarchy plugin add https://github.com/CHANGEME/omarchy-sshwatch.git --enable
+omarchy plugin add https://github.com/RayTM/omarchy-sshwatch.git --enable
 ```
 
 From a local checkout:
@@ -156,7 +156,7 @@ It is also not a session manager, not a Waybar module, and not a connection log 
 Run the helper by hand to see the raw answer:
 
 ```bash
-~/.config/omarchy/plugins/io.github.CHANGEME.sshwatch/bin/omarchy-sshwatch status | jq
+~/.config/omarchy/plugins/io.github.RayTM.sshwatch/bin/omarchy-sshwatch status | jq
 ```
 
 | Symptom | Cause |
@@ -169,27 +169,21 @@ Run the helper by hand to see the raw answer:
 | Focus-window greyed out | The session's owner is `tmux`, VS Code, `autossh`, or a systemd unit — there is no window to focus. |
 | Focus-window does nothing anywhere | `hyprctl` is missing or not on `PATH`. Check `hyprctl clients -j \| head`. |
 | `"lastError": "cannot read /proc"` | Unusual; a hardened kernel with `hidepid=2` will hide processes even from their owner in some configurations. |
-| Icon missing entirely | `omarchy plugin validate ~/.config/omarchy/plugins/io.github.CHANGEME.sshwatch` |
+| Icon missing entirely | `omarchy plugin validate ~/.config/omarchy/plugins/io.github.RayTM.sshwatch` |
 
 ## Updating
 
 ```bash
-omarchy plugin update io.github.CHANGEME.sshwatch
+omarchy plugin update io.github.RayTM.sshwatch
 ```
 
 ## Removal
 
 ```bash
-omarchy plugin remove io.github.CHANGEME.sshwatch
+omarchy plugin remove io.github.RayTM.sshwatch
 ```
 
 Nothing is left behind — the plugin writes no configuration or cache files.
-
-## Related
-
-- [omarchy-activity-monitor](https://github.com/stappmus/omarchy-activity-monitor) — CPU, RAM and
-  disk for the Omarchy bar. Complementary; it does not cover network or SSH.
-- [omarchy-pihole](https://github.com/CHANGEME/omarchy-pihole) — sibling plugin, same architecture.
 
 ## Licence
 
