@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="452" viewBox="0 0 720 452">
+  <!-- Preview mockup of the SSH Watch panel. Fictional hosts only.
+       Colours follow Omarchy's default (Catppuccin Mocha) palette;
+       fonts use Omarchy's default JetBrainsMono Nerd Font. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262638"/>
+      <stop offset="1" stop-color="#15151d"/>
+    </linearGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="720" height="452" fill="url(#bg)"/>
+
+  <!-- ===== bar ===== -->
+  <rect width="720" height="38" fill="#0f0f19"/>
+  <g font-family="JetBrainsMono Nerd Font, monospace">
+    <!-- workspaces -->
+    <rect x="14" y="8" width="22" height="22" rx="7" fill="#cdd6f4"/>
+    <text x="25" y="23" font-size="11" font-weight="700" fill="#11111b" text-anchor="middle">1</text>
+    <text x="50" y="23" font-size="11" fill="#848a9d" text-anchor="middle">2</text>
+    <text x="66" y="23" font-size="11" fill="#848a9d" text-anchor="middle">3</text>
+    <!-- clock -->
+    <text x="664" y="23" font-size="11" fill="#a6adc8" text-anchor="end">Mon 17:53</text>
+    <!-- sshwatch bar icon: prompt chevron + cursor underscore, amber = stale -->
+    <g stroke="#fab387" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 676,16 L 681.5,19.5 L 676,23"/>
+      <path d="M 684,23 L 690,23"/>
+    </g>
+  </g>
+
+  <!-- ===== panel ===== -->
+  <rect x="252" y="62" width="452" height="368" rx="14" fill="#000000" opacity="0.5" filter="url(#shadow)"/>
+  <rect x="252" y="54" width="452" height="368" rx="14" fill="#11111b" stroke="#ffffff16" stroke-width="1"/>
+
+  <g font-family="JetBrainsMono Nerd Font, monospace">
+    <!-- hero -->
+    <g stroke="#cdd6f4" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 272,88 L 279,93.5 L 272,99.5"/>
+      <path d="M 284,99.5 L 295,99.5"/>
+    </g>
+    <text x="304" y="92" font-size="17" font-weight="700" fill="#cdd6f4">SSH Watch</text>
+    <text x="304" y="108" font-size="11" fill="#848a9d">3 outgoing SSH connections</text>
+
+    <!-- ACTIVE -->
+    <text x="270" y="130" font-size="10" font-weight="700" letter-spacing="2" fill="#848a9d">ACTIVE</text>
+
+    <!-- row 1: stale background tunnel -->
+    <text x="264" y="160" font-size="13" fill="#fab387">&#x26a0;</text>
+    <text x="280" y="160" font-size="13" fill="#cdd6f4">deploy@prod-db</text>
+    <text x="636" y="160" font-size="13" fill="#fab387" text-anchor="end">7:42:11</text>
+    <text x="280" y="177" font-size="11" fill="#848a9d">autossh &#xb7; 10.0.0.7:22</text>
+    <text x="292" y="193" font-size="11" fill="#848a9d">L 5432 &#x2192; localhost:5432</text>
+    <text x="292" y="208" font-size="11" fill="#848a9d">no shell (-N)</text>
+
+    <!-- row 2: jump host -->
+    <text x="264" y="246" font-size="13" fill="#cdd6f4">deploy@prod  via bastion</text>
+    <text x="636" y="246" font-size="13" fill="#848a9d" text-anchor="end">2:14:07</text>
+    <text x="264" y="263" font-size="11" fill="#848a9d">alacritty &#xb7; 10.0.0.1:22</text>
+
+    <!-- row 3: multiplexed -->
+    <text x="264" y="302" font-size="13" fill="#cdd6f4">deploy@prod  &#xb7; shared</text>
+    <text x="636" y="302" font-size="13" fill="#848a9d" text-anchor="end">4:31</text>
+    <text x="264" y="319" font-size="11" fill="#848a9d">fish &#xb7; multiplexed</text>
+
+    <!-- separator -->
+    <line x1="270" y1="342" x2="686" y2="342" stroke="#ffffff14" stroke-width="1"/>
+
+    <!-- RECENT -->
+    <text x="270" y="364" font-size="10" font-weight="700" letter-spacing="2" fill="#848a9d">RECENT</text>
+    <text x="280" y="382" font-size="11" fill="#848a9d">deploy@staging &#xb7; ended 5 min ago &#xb7; lasted 2:14:07</text>
+    <text x="280" y="397" font-size="11" fill="#848a9d">git@github.com &#xb7; ended 1 h ago &#xb7; lasted 0:04</text>
+
+    <!-- row actions: focus (row 1 disabled: autossh owns no window) -->
+    <g opacity="0.35">
+      <rect x="644" y="167" width="22" height="22" rx="6" fill="#ffffff0f"/>
+      <text x="655" y="182.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#x2197;</text>
+    </g>
+    <rect x="644" y="238" width="22" height="22" rx="6" fill="#ffffff0f"/>
+    <text x="655" y="253.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#x2197;</text>
+    <rect x="644" y="294" width="22" height="22" rx="6" fill="#ffffff0f"/>
+    <text x="655" y="309.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#x2197;</text>
+
+    <!-- row actions: copy -->
+    <rect x="674" y="167" width="22" height="22" rx="6" fill="#ffffff0f"/>
+    <text x="685" y="182.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#xf018f;</text>
+    <rect x="674" y="238" width="22" height="22" rx="6" fill="#ffffff0f"/>
+    <text x="685" y="253.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#xf018f;</text>
+    <rect x="674" y="294" width="22" height="22" rx="6" fill="#ffffff0f"/>
+    <text x="685" y="309.5" font-size="13" fill="#cdd6f4" text-anchor="middle">&#xf018f;</text>
+  </g>
+</svg>
