@@ -334,27 +334,30 @@ def resolve_target(target, runner, cache, port_override=0):
     if "@" in alias:
         result["user"], alias = alias.split("@", 1)
     result["hostname"] = alias
+    # `--` ends option parsing: a target token that starts with "-" (legal
+    # after `--` in the session's own argv) must reach ssh as a hostname,
+    # never as an option.
     cmd = ["ssh", "-G"]
     if port_override:
         cmd += ["-p", str(port_override)]
-    cmd.append(target)
+    cmd += ["--", target]
     code, out = runner(cmd, SSH_G_TIMEOUT, 256 * 1024)
     if code == 0:
         for line in out.splitlines():
             parts = line.split(None, 1)
             if len(parts) != 2:
                 continue
-            key, value = parts[0].lower(), parts[1].strip()
-            if key == "user":
+            opt, value = parts[0].lower(), parts[1].strip()
+            if opt == "user":
                 result["user"] = value
-            elif key == "hostname":
+            elif opt == "hostname":
                 result["hostname"] = value
-            elif key == "port":
+            elif opt == "port":
                 try:
                     result["port"] = int(value)
                 except ValueError:
                     pass
-    cache[target] = result
+    cache[key] = result
     return result
 
 
